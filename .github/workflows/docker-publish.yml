@@ -8,8 +8,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: sentiric-tts-mms-service # Servise özel imaj adı
-  SERVICE_NAME: tts-mms-service # Servis adı
+  # DÜZELTME: Repo adını dinamik alarak "Owner/Repo" formatını garanti ediyoruz.
+  # Örn: sentiric/sentiric-tts-mms-service
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -21,6 +22,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # DÜZELTME: İmaj adını küçük harfe çevirme adımı (Docker standartları için kritik)
+      - name: Downcase Image Name
+        run: |
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >>${GITHUB_ENV}
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
@@ -49,7 +55,6 @@ jobs:
             type=ref,event=tag
             type=raw,value=${{ github.ref_name }}-gpu,enable=${{ startsWith(github.ref, 'refs/tags/') }}
 
-      # Model bake-in için build argümanı kullanılır.
       - name: Build and push Docker image
         id: build-and-push
         uses: docker/build-push-action@v5
@@ -62,4 +67,3 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             MODEL_ID=facebook/mms-tts-tur
-          # Gerekirse test adımları buraya eklenebilir (örn: docker compose run test)
