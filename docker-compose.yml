@@ -1,11 +1,56 @@
+networks:
+  sentiric-net:
+    name: "${NETWORK_NAME:-sentiric.cloud}"
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${NETWORK_SUBNET:-10.88.0.0/16}
+          gateway: ${NETWORK_GATEWAY:-10.88.0.1}
+
+volumes:
+  # =============================================================
+  # KATMAN 4: YAPAY ZEKA UZMAN MOTORLARI (AI EXPERT ENGINES)
+  # Gerçek AI işini yapan, potansiyel olarak yavaş başlayan servisler.
+  # =============================================================
+
+
+  # [capability-tts]: Konuşma Sentezleme Yetenekleri (TTS Capabilities)
+  # --------------------------------------------------     
+  tts-mms-models:
+  tts-mms-speakers:
+  tts-mms-history:
+  tts-mms-cache:  
+
 services:
-  mms-service:
-    build: .
-    container_name: sentiric-mms-service
-    ports:
-      - "8000:8000"
+  tts-mms-service:
+    image: ghcr.io/sentiric/sentiric-tts-mms-service:latest-gpu
+    build: 
+      context: .
+      dockerfile: Dockerfile
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      - ENV=production
+      - TTS_MMS_SERVICE_HTTP_PORT=14060
+      - TTS_MMS_SERVICE_GRPC_PORT=14061
+      - TTS_MMS_SERVICE_METRICS_PORT=14062
+      - TTS_MMS_SERVICE_DEVICE=cuda
+      - NVIDIA_VISIBLE_DEVICES=all      
+    volumes:
+      - tts-mms-cache:/app/cache # Yerel cache için
+      - tts-mms-history:/app/history # Konuşma geçmişi için    
+    ports:
+      - "14060:14060" # HTTP
+      - "14061:14061" # gRPC
+      - "14062:14062" # Metrics
+    networks:
+      sentiric-net:
+        ipv4_address: ${TTS_MMS_SERVICE_IPV4_ADDRESS:-10.88.40.6}        
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:14060/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5      # Model yüklenmesi uzun sürebilir, retry sayısını artırdık
+      start_period: 60s # İlk açılışta grace period    
     deploy:
       resources:
         reservations:

@@ -1,70 +1,91 @@
+import logging
+import shutil
 import os
-import io
+import asyncio
+from fastapi import FastAPI, Response, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Optional
+from prometheus_fastapi_instrumentator import Instrumentator
 
-import torch
-import soundfile as sf
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from transformers import VitsModel, AutoTokenizer
+from app.core.engine import tts_engine # Engine singleton olarak başlatıldı
+from app.api.endpoints import router as api_router
+from app.core.logging_utils import setup_logging
+from app.core.config import settings
+from app.grpc_server import serve_grpc
 
-# --- Globals ---
-class AppState:
-    model: Optional[VitsModel] = None
-    tokenizer: Optional[AutoTokenizer] = None
+setup_logging()
+logger = logging.getLogger("APP")
 
-app_state = AppState()
-MODEL_ID = os.getenv("MODEL_ID", "facebook/mms-tts-tur")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+UPLOAD_DIR = "/app/uploads"
+HISTORY_DIR = "/app/history"
+CACHE_DIR = "/app/cache"
 
-# --- Lifespan ---
+# Dizinlerin varlığından emin ol
+for d in [UPLOAD_DIR, HISTORY_DIR, CACHE_DIR]:
+    os.makedirs(d, exist_ok=True)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"🚀 Sunucu başlıyor... Cihaz: {DEVICE}")
-    print(f"⏳ Modeli yüklüyor: {MODEL_ID}")
+    logger.info(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
+    logger.info(f"🌍 Environment: {settings.ENV} | Device: {settings.DEVICE}")
+    
+    if settings.API_KEY:
+        logger.info("🔒 SECURITY: Standalone API Key protection ENABLED.")
+    else:
+        logger.info("🔓 SECURITY: Running in Open/Gateway Mode (No internal auth).")
+
+    # 1. Motoru Başlat (Singleton olduğu için ilk çağrıda initialize olur)
     try:
-        app_state.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-        app_state.model = VitsModel.from_pretrained(MODEL_ID).to(DEVICE)
-        print("✅ MMS Modeli başarıyla yüklendi.")
+        if not tts_engine.model: tts_engine.initialize() # Eğer değilse başlat
     except Exception as e:
-        print(f"❌ KRİTİK HATA: Model yüklenemedi. {e}")
+        logger.critical(f"🔥 CRITICAL: Engine failed to initialize: {e}")
+        # FastAPI bu hatayı yakalayıp uygulamayı durduracak
+        raise RuntimeError("Engine initialization failed") from e
+
+    # 2. gRPC Sunucusunu Arka Planda Başlat
+    grpc_task = asyncio.create_task(serve_grpc())
+    
     yield
-    print("🛑 Sunucu kapanıyor...")
-    app_state.model = None
-    app_state.tokenizer = None
-    torch.cuda.empty_cache()
+    
+    logger.info("🛑 Shutting down...")
+    grpc_task.cancel()
+    
+    # Cleanup (opsiyonel, container kapatılırken yapılabilir)
+    # shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
+    # logger.info("🧹 Uploads cleaned.")
 
-app = FastAPI(title="Sentiric MMS Service", lifespan=lifespan)
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.ENV != "production" else None, # Sadece dev'de docs
+    redoc_url=None
+)
 
-# --- Schema ---
-class TTSRequest(BaseModel):
-    text: str
+# --- MIDDLEWARE ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    # Coqui uyumluluğu için bu header'ları expose et
+    expose_headers=["X-VCA-Chars", "X-VCA-Time", "X-VCA-RTF", "X-Model", "X-Cache", "X-Trace-ID"] 
+)
 
-# --- Endpoint ---
-@app.post("/stream")
-async def stream_speech(request: TTSRequest):
-    if app_state.model is None or app_state.tokenizer is None:
-        raise HTTPException(status_code=503, detail="MMS modeli hazır değil.")
+# --- ROUTING ---
+app.include_router(api_router)
 
-    try:
-        inputs = app_state.tokenizer(request.text, return_tensors="pt").to(DEVICE)
-        
-        with torch.no_grad():
-            output = app_state.model(**inputs).waveform
-        
-        waveform = output.cpu().numpy().squeeze()
-        buffer = io.BytesIO()
-        sf.write(buffer, waveform, samplerate=app_state.model.config.sampling_rate, format='WAV')
-        buffer.seek(0)
+# --- Root Endpoint ---
+@app.get("/")
+async def root():
+    return {
+        "message": f"{settings.APP_NAME} Service",
+        "version": settings.APP_VERSION,
+        "docs": "/docs" if settings.ENV != "production" else "API Docs disabled in production"
+    }
 
-        async def stream_generator(data: bytes, chunk_size: int = 4096):
-            total_size = len(data)
-            for i in range(0, total_size, chunk_size):
-                yield data[i:i + chunk_size]
-
-        return StreamingResponse(stream_generator(buffer.getvalue()), media_type="audio/wav")
-    except Exception as e:
-        print(f"STREAMING ERROR: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# --- HEALTH CHECK (FastAPI lifespan'dan sonra daha doğru bilgi verir) ---
+# Bu endpoint, `/health` route'u zaten api_router'da tanımlandığı için kaldırıldı.
+# Gerekirse tekrar eklenebilir.

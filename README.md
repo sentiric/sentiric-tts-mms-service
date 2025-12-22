@@ -1,30 +1,29 @@
-# 🚀 Sentiric MMS-TTS Service v1.1
+# 🚀 Sentiric MMS-TTS Service v1.2 (Production Ready)
 
 [![Status](https://img.shields.io/badge/status-production_ready-success.svg)]()
 [![Engine](https://img.shields.io/badge/engine-Facebook_MMS-blue.svg)]()
-[![Latency](https://img.shields.io/badge/TTFB-%3C600ms-brightgreen.svg)]()
+[![TTFB](https://img.shields.io/badge/TTFB-%3C600ms-brightgreen.svg)]()
+[![gRPC](https://img.shields.io/badge/gRPC-supported-blue.svg)]()
+[![AI Contract](https://img.shields.io/badge/Contract-v1.12.3-success.svg)]()
 
-**Sentiric MMS-TTS Service**, Facebook'un Masif Çok Dilli (Massively Multilingual Speech) modelini temel alan, yüksek performanslı ve düşük gecikmeli bir Türkçe metin-ses dönüştürme (TTS) mikroservisidir.
+**Sentiric MMS-TTS Service**, Facebook'un Massively Multilingual Speech (MMS) modelini temel alan, yüksek performanslı ve düşük gecikmeli bir Türkçe metin-ses dönüştürme (TTS) mikroservisidir. Coqui XTTS servisiyle **tam eşdeğer yetenek seti** sunmayı hedefler.
 
-Bu servis, XTTSv2'nin yavaşlık sorunlarını aşmak ve 1 saniyenin altında TTFB (Time-To-First-Byte) süresi sağlamak amacıyla tasarlanmıştır.
+## 🚀 Temel Yetenekler
 
----
-
-## 🏛️ Mimari ve Teknoloji
-
-- **AI Motoru:** `facebook/mms-tts-tur` (Doğrudan Türkçe için eğitilmiş VITS modeli)
-- **Altyapı:** Hugging Face `transformers` kütüphanesi
-- **Servis Katmanı:** FastAPI (Asenkron)
-- **Dağıtım:** Docker (İzole ve taşınabilir "Appliance" modeli)
-- **Optimizasyon:** Tüm bağımlılıklar ve AI modeli, Docker imajının içine gömülerek (`bake-in`) her çalıştırmada tutarlı ve hızlı bir başlangıç (startup) süresi garanti edilir.
-
----
+*   **CPU/GPU Optimize:** CUDA destekli GPU veya CPU üzerinde çalışır.
+*   **Caching:** Aynı metin ve parametreler için tekrar sentezleme maliyetini ortadan kaldırır.
+*   **Streaming API:** Düşük gecikmeli ses akışı sunar (Pseudo-Streaming).
+*   **gRPC & REST API:** Hem iç servisler hem de dış dünya için esnek erişim.
+*   **OpenAI Uyumlu API:** Mevcut istemcilerle kolay entegrasyon.
+*   **Prometheus Metrikleri:** Ölçeklenebilirlik ve izleme için standart metrikler.
+*   **Gelişmiş Konfigürasyon:** Ortam değişkenleri ile kolay yapılandırma (`pydantic-settings`).
+*   **Cache & History:** Konuşma geçmişi ve tekrar istekler için disk tabanlı depolama.
 
 ## 🛠️ Kurulum ve Çalıştırma
 
 ### Ön Gereksinimler
 - Docker & Docker Compose
-- NVIDIA GPU ve [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- NVIDIA Container Toolkit (GPU kullanımı için)
 
 ### Adımlar
 
@@ -34,41 +33,58 @@ Bu servis, XTTSv2'nin yavaşlık sorunlarını aşmak ve 1 saniyenin altında TT
     cd sentiric-tts-mms-service
     ```
 
-2.  **Docker Servisini Başlat:**
-    Bu komut, Docker imajını oluşturacak, gerekli Python kütüphanelerini kuracak ve Facebook MMS modelini (~1.2 GB) imajın içine indirecektir. İlk build işlemi internet hızınıza bağlı olarak 5-15 dakika sürebilir.
-
+2.  **Docker Compose ile Başlat:**
     ```bash
-    docker compose up --build
+    # CPU için: TTS_MMS_SERVICE_DEVICE=cpu docker compose up -d
+    docker compose up -d --build
     ```
-
-    Loglarda `✅ MMS Modeli başarıyla yüklendi.` ve `Uvicorn running on http://0.0.0.0:8000` mesajlarını gördüğünüzde servis kullanıma hazırdır.
+    *Bu komut, tüm bağımlılıkları ve MMS modelini imajın içine gömerek build işlemini yapar.*
 
 ---
 
-## ⚡️ Kullanım ve Performans Testi
+## ⚡ API Kullanımı ve Testler
 
-Servis, `/stream` adında tek bir endpoint sunar. Bu endpoint, verilen metni seslendirir ve `audio/wav` formatında stream eder.
-
-### Hız Testi (TTFB)
-
-Aşağıdaki `curl` komutu, servise bir istek gönderir, `mms_test.wav` adında bir ses dosyası oluşturur ve en önemlisi, **ilk ses parçasının ne kadar sürede geldiğini (TTFB)** ölçer.
-
-**Test Komutu:**
+### 1. Health Check
 ```bash
-curl -N -X POST "http://localhost:8000/stream" \
--H "Content-Type: application/json" \
--d '{
-  "text": "Bu, Sentiric platformu için oluşturulmuş standart bir ses testidir. Sistem normal çalışıyor."
-}' \
--o mms_test.wav -w "TTFB: %{time_starttransfer}s\n"
+curl http://localhost:14060/health
+# Beklenen Çıktı: {"status":"ok", "model_loaded":true, "device":"cuda", "model_id":"facebook/mms-tts-tur", "sample_rate":16000}
 ```
 
-### Beklenen Sonuç
+### 2. Internal TTS API (REST)
+```bash
+# Unary İstek
+curl -X POST http://localhost:14060/api/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Bu, Sentirik platformu için oluşturulmuş standart bir ses testidir. Sistem normal çalışıyor.", "output_format": "wav"}' \
+  --output test_unary.wav
 
-- **İlk İstek (Cold Start):** `TTFB: ~1.3s` civarında olmalıdır. Bu, modelin GPU'ya ilk kez yüklendiği süredir.
-- **Sonraki İstekler (Warm):** `TTFB: ~0.6s` (600 milisaniye) veya altında olmalıdır. Bu, servisin gerçek performansını yansıtır.
+# Streaming İstek (Pseudo-Streaming)
+curl -X POST http://localhost:14060/api/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Bu, Sentirik platformu için oluşturulmuş canlı bir ses testidir. Sistem normal çalışıyor.", "stream": true}' \
+  --output test_stream.pcm
+```
 
-Oluşturulan `mms_test.wav` dosyasını dinleyerek ses kalitesini ve telaffuz doğruluğunu kontrol edebilirsiniz.
+### 3. OpenAI Uyumlu API (REST)
+```bash
+curl -X POST http://localhost:14060/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "tts-1", "input": "Bu, Sentirik platformu için oluşturulmuş open ui uyumlu bir ses testidir. Sistem normal çalışıyor.", "voice": "alloy"}' \
+  --output openai_test.wav
+```
+
+### 4. gRPC API Testi
+
+*   `sentiric-contracts` deposundan protobuf'ları derleyin: `make generate-all`
+*    Ardından `tests/grpc_client.py` betiğini çalıştırın: `python3 tests/grpc_client.py`
+
+---
+
+## Üretim Hazırlığı ve Sürdürülebilirlik
+
+*   **Persistent Volumes:** Kalıcı depolama için `/app/cache` ve `/app/history` dizinleri Docker volume'ları ile mount edilmelidir.
+*   **CI/CD Pipeline:** GitHub Actions, otomatik build, test ve `ghcr.io/sentiric/tts-mms-service:latest` imajının yayınlanmasını sağlamalıdır.
+*   **Monitoring:** `/metrics` endpoint'i Prometheus tarafından çekilmeli ve Grafana ile görselleştirilmelidir.
 
 ---
 

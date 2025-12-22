@@ -1,0 +1,33 @@
+# --- Core Frameworks ---
+# PyTorch (CUDA 11.8 uyumlu - Dockerfile ile senkronize)
+torch==2.1.2
+torchaudio==2.1.2
+numpy<2.0
+
+# --- ML & TTS ---
+# Transformers (MMS VITS desteği için)
+transformers==4.36.2
+scipy>=1.11.0
+accelerate>=0.25.0
+langid
+
+# --- API & Server ---
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+pydantic>=2.6.0
+pydantic-settings>=2.0.0
+
+# --- gRPC & Contracts ---
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
+# Contract paketinin son versiyonu
+sentiric-contracts-py @ git+https://github.com/sentiric/sentiric-contracts.git@main
+
+# --- Monitoring & Logging ---
+prometheus-fastapi-instrumentator>=6.1.0
+python-json-logger>=2.0.7
+
+# --- Utilities ---
+python-dotenv
+soundfile>=0.12.1
