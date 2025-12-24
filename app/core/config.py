@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = os.getenv("TTS_MMS_SERVICE_CORS_ORIGINS", "*").split(",")
     API_KEY: Optional[str] = os.getenv("TTS_MMS_SERVICE_API_KEY", None)
 
+    # --- TLS / mTLS CONFIG ---
+    GRPC_TLS_CA_PATH: str = os.getenv("GRPC_TLS_CA_PATH", "/sentiric-certificates/certs/ca.crt")
+    TTS_MMS_SERVICE_CERT_PATH: str = os.getenv("TTS_MMS_SERVICE_CERT_PATH", "/sentiric-certificates/certs/tts-mms-service.crt")
+    TTS_MMS_SERVICE_KEY_PATH: str = os.getenv("TTS_MMS_SERVICE_KEY_PATH", "/sentiric-certificates/certs/tts-mms-service.key")
+
     # --- MODEL & SYSTEM ---
     MODEL_ID: str = os.getenv("TTS_MMS_SERVICE_MODEL_ID", "facebook/mms-tts-tur")
     DEVICE: str = os.getenv("TTS_MMS_SERVICE_DEVICE", "cuda").strip().lower()
@@ -24,7 +29,6 @@ class Settings(BaseSettings):
     # --- INFERENCE DEFAULTS ---
     DEFAULT_LANGUAGE: str = "tur"
     DEFAULT_SPEED: float = float(os.getenv("TTS_MMS_SERVICE_DEFAULT_SPEED", "1.0"))
-    # MMS modelleri genellikle 16kHz (VITS) veya 24kHz olabilir. Model config'den okunacak ama default bu.
     DEFAULT_SAMPLE_RATE: int = int(os.getenv("TTS_MMS_SERVICE_DEFAULT_SAMPLE_RATE", "16000")) 
 
     # --- LOGGING ---
