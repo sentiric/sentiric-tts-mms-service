@@ -40,4 +40,7 @@ COPY . .
 
 # 9️⃣ Ports & Entrypoint
 EXPOSE 14060 14061 14062
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "14060"]
+
+# 🔟 CMD: Environment variable kullanarak başlatma
+# Not: Shell formunda yazıyoruz ki değişkenler expand edilebilsin.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 14060 --no-access-log"]
