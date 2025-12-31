@@ -28,7 +28,7 @@ class MmsEngine:
             cls._instance.device = settings.DEVICE
             cls._instance.sampling_rate = settings.DEFAULT_SAMPLE_RATE
             cls._instance.model_config = None
-            cls._instance.cache_file_ext = "wav" # Caching için kullanılacak uzantı
+            cls._instance.cache_file_ext = "wav"
         return cls._instance
 
     def initialize(self):
@@ -46,15 +46,27 @@ class MmsEngine:
                 raise e
 
     def _clean_text(self, text: str) -> str:
+        # Metin temizliği
         text = re.sub(r'\s+', ' ', text).strip()
         return text.lower()
 
     def _split_sentences(self, text: str) -> List[str]:
+        # [FIX] Daha sağlam bölme ve temizleme
+        # Sadece noktalama işaretlerini değil, boşlukları da temizle
+        # Lookbehind (?<=...) kullanarak noktalamayı cümlenin sonunda tutuyoruz.
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        return [s for s in sentences if s.strip()]
         
+        # [CRITICAL FIX] Sadece en az bir alfanümerik karakter içeren cümleleri filtrele
+        # Sadece "." veya "!" gibi parçalar modelde çökmeye neden olur.
+        valid_sentences = []
+        for s in sentences:
+            s = s.strip()
+            if s and re.search(r'[a-zA-Z0-9çğıöşüÇĞİÖŞÜ]', s):
+                valid_sentences.append(s)
+        
+        return valid_sentences
+
     def _generate_cache_key(self, text: str, language: str, speed: float) -> str:
-        """Cache için benzersiz ve deterministik bir anahtar oluşturur."""
         key_data = {
             "text": text,
             "lang": language,
@@ -70,31 +82,33 @@ class MmsEngine:
         cleaned_text = self._clean_text(text)
         cache_key = self._generate_cache_key(cleaned_text, settings.DEFAULT_LANGUAGE, speed)
 
-        # 1. Cache kontrolü
+        # Cache kontrolü
         cached_audio = tts_cache.load(cache_key)
         if cached_audio:
             logger.info(f"Cache HIT for key: {cache_key[:8]}...")
             return cached_audio
             
         logger.info(f"Cache MISS for key: {cache_key[:8]}...")
-        # 2. Caching yoksa sentezle
+        
         with self._lock:
             try:
+                # [FIX] return_tensors='pt' PyTorch tensörü döndürür.
                 inputs = self.tokenizer(cleaned_text, return_tensors="pt").to(self.device)
+                
+                # [FIX] MMS VITS modeli input_ids'i LongTensor bekler. CPU'da bazen Float gelebilir, garantiye alalım.
+                # Ancak tokenizer zaten LongTensor döner. Sorun muhtemelen stream kısmındaydı.
+                # Yine de burada da kontrol etmekte fayda var.
+                
                 with torch.no_grad():
                     output = self.model(**inputs).waveform
                 
                 waveform_np = output.cpu().numpy().squeeze()
                 audio_bytes = audio_processor.numpy_to_wav_bytes(waveform_np, self.sampling_rate)
                 
-                # 3. Sonucu cache'e kaydet
                 tts_cache.save(cache_key, audio_bytes)
-                
-                # 4. History'ye ekle
                 history_manager.add_entry(
                     filename=cache_key, text=text, language=settings.DEFAULT_LANGUAGE,
-                    speaker=None, # MMS'te speaker seçimi yok
-                    mode="Standard"
+                    speaker=None, mode="Standard"
                 )
                 
                 if self.device == "cuda": torch.cuda.empty_cache()
@@ -106,15 +120,24 @@ class MmsEngine:
 
     def synthesize_stream(self, text: str, speed: float = 1.0) -> Generator[bytes, None, None]:
         sentences = self._split_sentences(text)
-        if not sentences: return
+        if not sentences: 
+            # Hiç cümle yoksa (örn: sadece nokta geldi), boş dönme, güvenli bir şekilde çık
+            return
         
-        # Stream cache'lenmez. Her cümle ayrı üretilir.
         for i, sentence in enumerate(sentences):
+            # [Double Check] Yine de boşsa atla
             if not sentence.strip(): continue
             
             with self._lock:
                 try:
                     inputs = self.tokenizer(sentence, return_tensors="pt").to(self.device)
+                    inputs = {k: v.to(dtype=torch.long) for k, v in inputs.items()}
+                    
+                    # [Safety] Input size kontrolü
+                    if inputs['input_ids'].size(1) == 0:
+                        logger.warning(f"Skipping empty tensor for sentence: '{sentence}'")
+                        continue
+
                     with torch.no_grad():
                         output = self.model(**inputs).waveform
                     
@@ -123,7 +146,6 @@ class MmsEngine:
                     
                     if len(pcm_bytes) > 0:
                         yield pcm_bytes
-                        # History'ye ilk cümlenin kaydı eklenebilir (opsiyonel)
                         if i == 0:
                            history_manager.add_entry(
                                 filename=f"stream_{hashlib.md5(text.encode()).hexdigest()}.pcm",
@@ -132,10 +154,10 @@ class MmsEngine:
                            )
                         
                 except Exception as e:
-                    logger.error(f"Stream synthesis error for sentence '{sentence[:30]}...': {e}", exc_info=True)
+                    # Hata olsa bile stream'i koparma, logla ve devam et
+                    logger.error(f"Stream synthesis error for sentence '{sentence}': {e}", exc_info=False)
                     continue
                 finally:
                     if self.device == "cuda": torch.cuda.empty_cache()
 
-# Singleton instance
 tts_engine = MmsEngine()
