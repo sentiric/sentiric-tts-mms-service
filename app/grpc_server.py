@@ -61,7 +61,6 @@ def load_tls_credentials():
         with open(settings.GRPC_TLS_CA_PATH, 'rb') as f:
             root_ca = f.read()
 
-        # mTLS: require_client_auth=True zorunlu
         server_credentials = grpc.ssl_server_credentials(
             [(private_key, certificate_chain)],
             root_certificates=root_ca,
@@ -82,14 +81,24 @@ async def serve_grpc():
     
     listen_addr = f"[::]:{settings.GRPC_PORT}"
     
-    # GÜVENLİK GÜNCELLEMESİ: mTLS Etkinleştirme
-    try:
-        tls_creds = load_tls_credentials()
-        server.add_secure_port(listen_addr, tls_creds)
-        logger.info(f"🔒 gRPC Server (MMS) starting on {listen_addr} (mTLS Enabled)")
-    except Exception:
-        logger.error("Failed to initialize secure port, shutting down.")
-        return
+    # [FIX] Insecure Fallback Logic (MMS)
+    use_tls = (
+        settings.TTS_MMS_SERVICE_KEY_PATH and os.path.exists(settings.TTS_MMS_SERVICE_KEY_PATH) and
+        settings.TTS_MMS_SERVICE_CERT_PATH and os.path.exists(settings.TTS_MMS_SERVICE_CERT_PATH) and
+        settings.GRPC_TLS_CA_PATH and os.path.exists(settings.GRPC_TLS_CA_PATH)
+    )
+
+    if use_tls:
+        try:
+            tls_creds = load_tls_credentials()
+            server.add_secure_port(listen_addr, tls_creds)
+            logger.info(f"🔒 gRPC Server (MMS) starting on {listen_addr} (mTLS Enabled)")
+        except Exception:
+            logger.error("Failed to initialize secure port, shutting down.")
+            return
+    else:
+        logger.warning(f"⚠️ TLS paths missing or invalid. Starting gRPC Server (MMS) on {listen_addr} (INSECURE)")
+        server.add_insecure_port(listen_addr)
 
     await server.start()
     try:
