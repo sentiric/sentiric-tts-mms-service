@@ -51,18 +51,19 @@ class MmsEngine:
         return text.lower()
 
     def _split_sentences(self, text: str) -> List[str]:
-        # [FIX] Daha sağlam bölme ve temizleme
-        # Sadece noktalama işaretlerini değil, boşlukları da temizle
-        # Lookbehind (?<=...) kullanarak noktalamayı cümlenin sonunda tutuyoruz.
-        sentences = re.split(r'(?<=[.!?])\s+', text)
+        # [FIX] Daha sağlam bölme
+        # Noktalama işaretlerine göre böl ama onları da tut (lookbehind)
+        raw_sentences = re.split(r'(?<=[.!?])\s+', text)
         
-        # [CRITICAL FIX] Sadece en az bir alfanümerik karakter içeren cümleleri filtrele
-        # Sadece "." veya "!" gibi parçalar modelde çökmeye neden olur.
         valid_sentences = []
-        for s in sentences:
+        for s in raw_sentences:
             s = s.strip()
+            # [CRITICAL FIX] En az bir HARF veya RAKAM içermeli.
+            # Sadece noktalama (., !, ?) veya sembol varsa atla.
             if s and re.search(r'[a-zA-Z0-9çğıöşüÇĞİÖŞÜ]', s):
                 valid_sentences.append(s)
+            else:
+                logger.debug(f"Skipping non-speech segment: '{s}'")
         
         return valid_sentences
 
@@ -119,23 +120,22 @@ class MmsEngine:
                 raise e
 
     def synthesize_stream(self, text: str, speed: float = 1.0) -> Generator[bytes, None, None]:
-        sentences = self._split_sentences(text)
-        if not sentences: 
-            # Hiç cümle yoksa (örn: sadece nokta geldi), boş dönme, güvenli bir şekilde çık
-            return
+        # [FIX] Metni temizle (Gereksiz sembolleri at)
+        # Örn: "!Merhaba" -> "Merhaba"
+        clean_text = re.sub(r'^[\W_]+', '', text) 
+        
+        sentences = self._split_sentences(clean_text)
+        if not sentences: return
         
         for i, sentence in enumerate(sentences):
-            # [Double Check] Yine de boşsa atla
             if not sentence.strip(): continue
             
             with self._lock:
                 try:
                     inputs = self.tokenizer(sentence, return_tensors="pt").to(self.device)
-                    inputs = {k: v.to(dtype=torch.long) for k, v in inputs.items()}
-                    
-                    # [Safety] Input size kontrolü
+                    # [Safety] Input size kontrolü (Yine de ekleyelim)
                     if inputs['input_ids'].size(1) == 0:
-                        logger.warning(f"Skipping empty tensor for sentence: '{sentence}'")
+                        logger.warning(f"Skipping empty tensor for: '{sentence}'")
                         continue
 
                     with torch.no_grad():
